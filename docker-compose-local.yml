@@ -1,0 +1,14 @@
+services:
+  albyhub:
+    build: .
+    volumes:
+      - ./data:/data
+    ports:
+      - "8080:8080"
+    environment:
+      - LOG_EVENTS=true
+      - MEMPOOL_API=https://mutinynet.com/api
+      - LDK_NETWORK=signet
+      - LDK_ESPLORA_SERVER=https://mutinynet.com/api
+      - WORK_DIR=/data
+      - REBALANCE_SERVICE_URL=https://lsp1.mutiny.megalith-node.com
