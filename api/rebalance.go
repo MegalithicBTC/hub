@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/getAlby/hub/logger"
@@ -19,6 +20,65 @@ func (api *api) RebalanceChannel(ctx context.Context, rebalanceChannelRequest *R
 	if api.svc.GetLNClient() == nil {
 		return nil, errors.New("LNClient not started")
 	}
+
+	// Validate that the receive_through node is actually a channel peer
+	channels, err := api.svc.GetLNClient().ListChannels(ctx)
+	if err != nil {
+		logger.Logger.WithError(err).Error("Failed to list channels for rebalance validation")
+		return nil, fmt.Errorf("failed to validate rebalance request: %w", err)
+	}
+
+	var hasChannelWithNode bool
+	var channelInfo string
+	for _, channel := range channels {
+		if channel.RemotePubkey == rebalanceChannelRequest.ReceiveThroughNodePubkey {
+			hasChannelWithNode = true
+			capacity := channel.LocalBalance + channel.RemoteBalance
+			channelInfo = fmt.Sprintf("capacity=%d local_balance=%d remote_balance=%d active=%t",
+				capacity, channel.LocalBalance, channel.RemoteBalance, channel.Active)
+			break
+		}
+	}
+
+	if !hasChannelWithNode {
+		logger.Logger.WithFields(logrus.Fields{
+			"receive_through_pubkey": rebalanceChannelRequest.ReceiveThroughNodePubkey,
+			"available_peers": func() []string {
+				var peers []string
+				for _, ch := range channels {
+					peers = append(peers, ch.RemotePubkey)
+				}
+				return peers
+			}(),
+		}).Error("No active channel found with specified receive_through node")
+		return nil, fmt.Errorf("no channel found with node %s", rebalanceChannelRequest.ReceiveThroughNodePubkey)
+	}
+
+	logger.Logger.WithFields(logrus.Fields{
+		"receive_through_pubkey": rebalanceChannelRequest.ReceiveThroughNodePubkey,
+		"channel_info":           channelInfo,
+		"amount_sat":             rebalanceChannelRequest.AmountSat,
+	}).Info("Starting rebalance through validated channel peer")
+
+	// Log all channels for routing diagnostics
+	var channelSummary []map[string]interface{}
+	for _, ch := range channels {
+		capacity := ch.LocalBalance + ch.RemoteBalance
+		channelSummary = append(channelSummary, map[string]interface{}{
+			"remote_pubkey":  ch.RemotePubkey,
+			"capacity_msat":  capacity,
+			"local_balance":  ch.LocalBalance,
+			"remote_balance": ch.RemoteBalance,
+			"spendable":      ch.LocalSpendableBalance,
+			"active":         ch.Active,
+			"public":         ch.Public,
+			"is_outbound":    ch.IsOutbound,
+		})
+	}
+	logger.Logger.WithFields(logrus.Fields{
+		"total_channels": len(channels),
+		"channels":       channelSummary,
+	}).Info("Available channels for routing diagnostics")
 
 	receiveMetadata := map[string]interface{}{
 		"receive_through": rebalanceChannelRequest.ReceiveThroughNodePubkey,
@@ -108,6 +168,15 @@ func (api *api) RebalanceChannel(ctx context.Context, rebalanceChannelRequest *R
 
 	logger.Logger.WithField("response", rebalanceCreateOrderResponse).Info("New rebalance order created")
 
+	// Log additional context for debugging routing issues
+	nodeInfo, err := api.svc.GetLNClient().GetNodeConnectionInfo(ctx)
+	if err == nil {
+		logger.Logger.WithFields(logrus.Fields{
+			"our_pubkey":             nodeInfo.Pubkey,
+			"receive_through_pubkey": rebalanceChannelRequest.ReceiveThroughNodePubkey,
+		}).Info("Node information for rebalance routing")
+	}
+
 	paymentRequest, err := decodepay.Decodepay(rebalanceCreateOrderResponse.PayRequest)
 	if err != nil {
 		logger.Logger.WithError(err).Error("Failed to decode bolt11 invoice")
@@ -120,11 +189,44 @@ func (api *api) RebalanceChannel(ctx context.Context, rebalanceChannelRequest *R
 		"order_id":        rebalanceCreateOrderResponse.OrderId,
 	}
 
+	logger.Logger.WithFields(logrus.Fields{
+		"receive_through_pubkey": rebalanceChannelRequest.ReceiveThroughNodePubkey,
+		"amount_sat":             rebalanceChannelRequest.AmountSat,
+		"order_id":               rebalanceCreateOrderResponse.OrderId,
+		"payment_hash":           paymentRequest.PaymentHash,
+		"destination":            paymentRequest.Payee,
+		"amount_msat":            paymentRequest.MSatoshi,
+		"description":            paymentRequest.Description,
+		"expiry":                 paymentRequest.Expiry,
+	}).Info("Attempting to pay rebalance invoice")
+
 	payRebalanceInvoiceResponse, err := api.svc.GetTransactionsService().SendPaymentSync(ctx, rebalanceCreateOrderResponse.PayRequest, nil, payMetadata, api.svc.GetLNClient(), nil, nil, nil)
 
 	if err != nil {
-		logger.Logger.WithError(err).Error("failed to pay rebalance invoice")
-		return nil, err
+		logger.Logger.WithFields(logrus.Fields{
+			"receive_through_pubkey": rebalanceChannelRequest.ReceiveThroughNodePubkey,
+			"amount_sat":             rebalanceChannelRequest.AmountSat,
+			"order_id":               rebalanceCreateOrderResponse.OrderId,
+			"payment_hash":           paymentRequest.PaymentHash,
+			"destination":            paymentRequest.Payee,
+			"amount_msat":            paymentRequest.MSatoshi,
+			"bolt11":                 rebalanceCreateOrderResponse.PayRequest,
+		}).WithError(err).Error("Failed to pay rebalance invoice - check if routing path exists through specified node")
+
+		// Provide more specific error guidance
+		var enhancedError string
+		if strings.Contains(err.Error(), "RouteNotFound") || strings.Contains(err.Error(), "route") {
+			enhancedError = fmt.Sprintf("Failed to pay rebalance invoice: %v. "+
+				"This typically indicates insufficient liquidity in the specified routing path. "+
+				"Please ensure: 1) The receive_through node (%s) has sufficient outbound liquidity to the destination, "+
+				"2) Your node has sufficient outbound liquidity to the receive_through node, "+
+				"3) The amount (%d sats) is within routing limits",
+				err, rebalanceChannelRequest.ReceiveThroughNodePubkey, rebalanceChannelRequest.AmountSat)
+		} else {
+			enhancedError = fmt.Sprintf("failed to pay rebalance invoice: %v", err)
+		}
+
+		return nil, errors.New(enhancedError)
 	}
 
 	return &RebalanceChannelResponse{

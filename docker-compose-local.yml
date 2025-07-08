@@ -12,3 +12,5 @@ services:
       - LDK_ESPLORA_SERVER=https://mutinynet.com/api
       - WORK_DIR=/data
       - REBALANCE_SERVICE_URL=https://lsp1.mutiny.megalith-node.com
+      - LDK_LOG_LEVEL=1
+      - LOG_LEVEL=6
