@@ -30,3 +30,4 @@ glalby
 *.db-shm
 *.db-wal
 data/
+data_mainnet/
