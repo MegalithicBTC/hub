@@ -5,12 +5,9 @@ services:
     container_name: albyhub
     image: ghcr.io/getalby/hub:latest
     volumes:
-      - ./data:/data
+      - ./albyhub-data:/data
     ports:
       - "8080:8080"
     environment:
+      - WORK_DIR=/data/albyhub
       - LOG_EVENTS=true
-      - MEMPOOL_API=https://mutinynet.com/api
-      - LDK_NETWORK=signet
-      - LDK_ESPLORA_SERVER=https://mutinynet.com/api
-      - WORK_DIR=./data
