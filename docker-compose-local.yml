@@ -1,10 +1,27 @@
+# services:
+#   albyhub:
+#     build: .
+#     volumes:
+#       - ./data:/data
+#     ports:
+#       - "8080:8080"
+#     environment:
+#       - LOG_EVENTS=true
+#       - MEMPOOL_API=https://mutinynet.com/api
+#       - LDK_NETWORK=signet
+#       - LDK_ESPLORA_SERVER=https://mutinynet.com/api
+#       - WORK_DIR=/data
+#       - REBALANCE_SERVICE_URL=https://lsp1.mutiny.megalith-node.com
+#       - LDK_LOG_LEVEL=1
+#       - LOG_LEVEL=6
+
 services:
   albyhub:
     build: .
     volumes:
       - ./data:/data
     ports:
-      - "8080:8080"
+      - "8081:8080" # External port 8081, internal still 8080
     environment:
       - LOG_EVENTS=true
       - MEMPOOL_API=https://mutinynet.com/api
@@ -14,3 +31,4 @@ services:
       - REBALANCE_SERVICE_URL=https://lsp1.mutiny.megalith-node.com
       - LDK_LOG_LEVEL=1
       - LOG_LEVEL=6
+      - LDK_LISTENING_ADDRESSES=0.0.0.0:9736,[::]:9736 # Different LDK P2P ports
