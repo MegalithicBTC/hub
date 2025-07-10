@@ -29,4 +29,5 @@ glalby
 
 *.db-shm
 *.db-wal
-*.db-journal
+data/
+data_mainnet/
