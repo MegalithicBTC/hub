@@ -32,3 +32,5 @@ glalby
 *.db-journal
 albyhub-data
 .claude/worktrees
+data/
+data_mainnet/
