@@ -31,3 +31,4 @@ glalby
 *.db-wal
 data/
 data_mainnet/
+data_two/
